@@ -1,0 +1,7 @@
+.idea
+.env
+utils/chrome.exe
+venv
+__pycache__
+chrome-dir
+chrome-win64
