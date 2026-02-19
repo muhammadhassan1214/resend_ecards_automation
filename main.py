@@ -1,5 +1,5 @@
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from utils.elements_locators import ECardsLocators as El
 from utils.helper import check_element_exists, click_element
 
@@ -15,34 +15,46 @@ from utils.automation import (
 )
 
 
-DAILY_INTERVAL_SECONDS = 24 * 60 * 60
+def get_next_9am():
+    now = datetime.now()
+    target = now.replace(hour=9, minute=0, second=0, microsecond=0)
 
-def run_daily():
-    print("Starting scheduled automation (runs every day)")
+    # If it's already past 9 AM today → schedule for tomorrow
+    if now >= target:
+        target += timedelta(days=1)
+
+    return target
+
+
+def run_daily_at_9am():
+    print("Scheduler started. Will run daily at 09:00 AM.")
+
     run_count = 0
+
     while True:
+        next_run = get_next_9am()
+        wait_seconds = (next_run - datetime.now()).total_seconds()
+
+        print(f"\nNext run scheduled for: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"Waiting {wait_seconds / 3600:.2f} hours...\n")
+
+        time.sleep(wait_seconds)
+
         run_count += 1
         start = time.time()
+
         print(f"\n{'=' * 50}")
         print(f"DAILY RUN #{run_count}")
         print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"{'=' * 50}")
+
         try:
             main()
         except Exception as e:
             print(f"Unhandled error in scheduled run #{run_count}: {e}")
-        # --- Timing Logic ---
+
         elapsed = time.time() - start
-        remaining = DAILY_INTERVAL_SECONDS - elapsed
-        if remaining > 0:
-            next_run_timestamp = time.time() + remaining
-            next_run_time = datetime.fromtimestamp(next_run_timestamp).strftime('%Y-%m-%d %H:%M:%S')
-            print(f"Run #{run_count} completed in {elapsed:.1f}s")
-            print(f"Next run scheduled for: {next_run_time}")
-            print(f"Waiting {remaining / 3600:.2f} hours...")
-            time.sleep(remaining)
-        else:
-            print(f"Run #{run_count} took longer than a day! Starting next run immediately.")
+        print(f"Run #{run_count} completed in {elapsed:.1f}s")
 
 
 def main():
@@ -88,4 +100,4 @@ def main():
 
 
 if __name__ == "__main__":
-    run_daily()
+    run_daily_at_9am()
