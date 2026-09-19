@@ -17,3 +17,5 @@ class ECardsLocators:
     RESEND_ECARD_BUTTON = (By.ID, "btnResend")
     WAIT_MESSAGE = (By.XPATH, "//div[@class= 'progress']")
     NEXT_PAGE_SELECTOR = lambda x: (By.XPATH, f"//a[text()= '{x}']")
+    INSTRUCTOR = lambda x: (By.XPATH, f"//tr[{x}]/td[6]")
+    SESSION_POPUP_OK_BUTTON = (By.XPATH, "//button[text()= 'Ok']")

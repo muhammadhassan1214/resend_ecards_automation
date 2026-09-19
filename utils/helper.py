@@ -1,6 +1,10 @@
 import os
+import csv
 import time
 import logging
+import threading
+from datetime import datetime
+from collections import OrderedDict
 from typing import Optional
 from selenium import webdriver
 from selenium.webdriver.support import expected_conditions as EC
@@ -19,6 +23,182 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 driver_path = os.path.abspath(os.path.join(BASE_DIR, 'chrome.exe'))
+
+
+class SessionPopupHandler:
+    """Background thread that keeps the session alive using a two-pronged
+    approach:
+
+    1. **JS Override** – After every navigation, ``inject_override()``
+       replaces the page's ``TimeOut()`` function so it automatically calls
+       ``ExtendTimeout()`` instead of showing the modal.  This means even
+       if the server fires the timeout callback, the session is silently
+       extended.
+
+    2. **Periodic heartbeat** – A daemon thread hits ``/ExtendSession/Extend``
+       via ``jQuery.get`` every ~4 min 55 s as a safety-net, and also
+       dismisses the modal + calls ``ExtendTimeout()`` if the popup somehow
+       appears.
+    """
+
+    EXTEND_INTERVAL = 295  # 4 minutes 55 seconds
+
+    # JS snippet that neuters the TimeOut popup and auto-extends
+    _OVERRIDE_JS = """
+    (function(){
+        // Override TimeOut so it auto-extends instead of showing the modal
+        window.TimeOut = function(){
+            if(typeof ExtendTimeout === 'function'){ ExtendTimeout(); }
+            try{ $('#timeOutModal').modal('hide'); }catch(e){}
+            console.log('[SessionPopupHandler] TimeOut intercepted — session extended');
+        };
+
+        // Clear any pending logout timer that TimerLogout() may have started
+        if(typeof objLogout !== 'undefined'){
+            try{ clearTimeout(objLogout); clearInterval(objLogout); }catch(e){}
+        }
+
+        // Dismiss the modal right now if it's visible (BS3 uses 'in', BS4/5 uses 'show')
+        try{
+            var m = document.getElementById('timeOutModal');
+            if(m && (m.classList.contains('in') || m.classList.contains('show') || m.style.display === 'block')){
+                if(typeof ExtendTimeout === 'function'){ ExtendTimeout(); }
+                try{ $('#timeOutModal').modal('hide'); }catch(e){}
+            }
+        }catch(e){}
+
+        // Safety-net: set up a recurring watcher that auto-dismisses the modal
+        // if it ever becomes visible (runs every 5 seconds)
+        if(!window._sessionPopupWatcher){
+            window._sessionPopupWatcher = setInterval(function(){
+                try{
+                    var m = document.getElementById('timeOutModal');
+                    if(m && (m.classList.contains('in') || m.classList.contains('show') || m.style.display === 'block')){
+                        if(typeof ExtendTimeout === 'function'){ ExtendTimeout(); }
+                        try{ $('#timeOutModal').modal('hide'); }catch(e){}
+                        console.log('[SessionPopupHandler] Modal dismissed by watcher');
+                    }
+                }catch(e){}
+            }, 5000);
+        }
+    })();
+    """
+
+    def __init__(self, driver, interval=None):
+        self._driver = driver
+        self._interval = interval or self.EXTEND_INTERVAL
+        self._running = False
+        self._thread = None
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+    def start(self):
+        """Start the background session-extend thread."""
+        if self._running:
+            return
+        self._running = True
+        self._thread = threading.Thread(target=self._keep_session_alive, daemon=True)
+        self._thread.start()
+        logger.info(
+            "Session popup handler started — heartbeat every %ss, "
+            "TimeOut() override active.", self._interval
+        )
+
+    def stop(self):
+        """Stop the background session-extend thread."""
+        self._running = False
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5)
+        logger.info("Session popup handler stopped.")
+
+    def inject_override(self):
+        """Inject (or re-inject) the TimeOut override into the current page.
+
+        Call this after every full-page navigation so the override survives
+        page reloads.
+        """
+        try:
+            self._driver.execute_script(self._OVERRIDE_JS)
+            logger.debug("TimeOut override injected into page.")
+        except WebDriverException:
+            pass
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Background heartbeat
+    # ------------------------------------------------------------------
+    def _keep_session_alive(self):
+        while self._running:
+            # Sleep first — the session is fresh right after login
+            for _ in range(self._interval):
+                if not self._running:
+                    return
+                time.sleep(1)
+            try:
+                # 1) Re-inject override (page may have reloaded)
+                self._driver.execute_script(self._OVERRIDE_JS)
+                # 2) Proactively extend via the AJAX endpoint
+                self._driver.execute_script(
+                    "if(typeof jQuery!=='undefined'){"
+                    "  jQuery.get('/ExtendSession/Extend');"
+                    "}"
+                    "if(typeof ExtendTimeout==='function'){ ExtendTimeout(); }"
+                )
+                # 3) Dismiss modal if somehow visible
+                self._driver.execute_script(
+                    "try{ $('#timeOutModal').modal('hide'); }catch(e){}"
+                )
+                logger.info("Session heartbeat — extended session & re-injected override.")
+            except WebDriverException:
+                # Driver may be busy navigating or closed; silently ignore
+                pass
+            except Exception:
+                pass
+
+
+class ReportLogger:
+    """Tracks processed entries per training site / instructor and saves a CSV report."""
+
+    def __init__(self):
+        # { training_site: OrderedDict{ instructor: count } }
+        self._data = OrderedDict()
+        self._totals = OrderedDict()  # { training_site: total_count }
+
+    def record_entry(self, training_site: str, instructor: str):
+        """Record a single processed ecard entry."""
+        if training_site not in self._data:
+            self._data[training_site] = OrderedDict()
+            self._totals[training_site] = 0
+
+        self._data[training_site][instructor] = self._data[training_site].get(instructor, 0) + 1
+        self._totals[training_site] += 1
+
+    def save_report(self):
+        """Write the report to logs/<run_date>.csv"""
+        project_root = os.path.dirname(BASE_DIR)  # one level up from utils/
+        logs_dir = os.path.join(project_root, "logs")
+        os.makedirs(logs_dir, exist_ok=True)
+
+        filename = datetime.now().strftime("%Y-%m-%d") + ".csv"
+        filepath = os.path.join(logs_dir, filename)
+
+        with open(filepath, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Training Site", "Instructor (Entries)", "Total Processed Entries"])
+
+            for site, instructors in self._data.items():
+                total = self._totals[site]
+                first_row = True
+                for instructor, count in instructors.items():
+                    row_site = site if first_row else ""
+                    row_total = total if first_row else ""
+                    writer.writerow([row_site, f"{instructor}: {count}", row_total])
+                    first_row = False
+
+        logger.info(f"Report saved to {filepath}")
+        return filepath
 
 
 def get_undetected_driver(headless: bool = False, max_retries: int = 3) -> Optional[webdriver.Chrome]:
@@ -48,7 +228,6 @@ def get_undetected_driver(headless: bool = False, max_retries: int = 3) -> Optio
             options.add_argument("--disable-extensions")
             options.add_argument("--disable-plugins")
             options.add_argument("--disable-images")
-            options.add_argument("--disable-javascript")
             options.add_argument("--disable-dev-shm-usage")
             options.add_argument("--disable-background-timer-throttling")
             options.add_argument("--disable-backgrounding-occluded-windows")
@@ -120,13 +299,16 @@ def wait_for_page_load(driver, timeout: int = 30) -> bool:
         return False
 
 
-def safe_navigate_to_url(driver, url: str, max_retries: int = 3) -> bool:
+def safe_navigate_to_url(driver, url: str, max_retries: int = 3, popup_handler: Optional['SessionPopupHandler'] = None) -> bool:
     """Navigate to URL with retry logic and exception handling."""
     for attempt in range(max_retries):
         try:
             driver.get(url)
             if wait_for_page_load(driver):
                 logger.info(f"Successfully navigated to: {url}")
+                # Re-inject session override after page load
+                if popup_handler is not None:
+                    popup_handler.inject_override()
                 return True
             else:
                 logger.warning(f"Page load incomplete for: {url}")
@@ -155,6 +337,7 @@ def click_element(driver, locator, timeout: int = 10) -> bool:
         logger.error(f"Element not clickable within {timeout} seconds: {locator}")
         return False
     except WebDriverException as e:
+        save_error_screenshot(driver, name=f"click_error_{int(time.time())}.png")
         logger.error(f"Error clicking element: {e}")
         return False
 
@@ -245,3 +428,12 @@ def wait_while_element_is_displaying(driver, by_locator, timeout: int = 30) -> b
     except WebDriverException as e:
         logger.error(f"Error waiting for element to disappear: {e}")
         return False
+
+
+def save_error_screenshot(driver, name: str = "screenshot.png") -> None:
+    """Save screenshot with error handling."""
+    try:
+        driver.save_screenshot(os.path.join(BASE_DIR, name))
+        logger.info(f"Screenshot saved: {name}")
+    except WebDriverException as e:
+        logger.error(f"Error saving screenshot: {e}")

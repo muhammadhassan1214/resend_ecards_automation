@@ -15,14 +15,14 @@ from utils.helper import (
 
 load_dotenv(verbose=True)
 
-def login_to_ecards(driver) -> bool:
+def login_to_ecards(driver, popup_handler=None) -> bool:
     BASE_URL = "https://ecards.heart.org"
     """Login to eCards with comprehensive error handling and retry logic."""
     try:
-        safe_navigate_to_url(driver, f"{BASE_URL}/Inventory")
+        safe_navigate_to_url(driver, f"{BASE_URL}/Inventory", popup_handler=popup_handler)
         # Check if already logged in
         if f"{BASE_URL}/Inventory" == driver.current_url:
-            safe_navigate_to_url(driver, f"{BASE_URL}/SearchAllECards")
+            safe_navigate_to_url(driver, f"{BASE_URL}/SearchAllECards", popup_handler=popup_handler)
             return True
         # Check for sign-in button
         sign_in_button = check_element_exists(driver, El.SIGN_IN_BUTTON, timeout=3)
@@ -52,7 +52,7 @@ def login_to_ecards(driver) -> bool:
             time.sleep(5)
             # Verify login success
             if f"{BASE_URL}/Inventory" == driver.current_url:
-                safe_navigate_to_url(driver, f"{BASE_URL}/SearchAllECards")
+                safe_navigate_to_url(driver, f"{BASE_URL}/SearchAllECards", popup_handler=popup_handler)
                 return True
             else:
                 return False
