@@ -1,9 +1,6 @@
 import os
-import csv
 import time
 import logging
-from datetime import datetime
-from collections import OrderedDict
 from typing import Optional
 from selenium import webdriver
 from selenium.webdriver.support import expected_conditions as EC
@@ -22,49 +19,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 driver_path = os.path.abspath(os.path.join(BASE_DIR, 'chrome.exe'))
-
-
-class ReportLogger:
-    """Tracks processed entries per training site / instructor and saves a CSV report."""
-
-    def __init__(self):
-        # { training_site: OrderedDict{ instructor: count } }
-        self._data = OrderedDict()
-        self._totals = OrderedDict()  # { training_site: total_count }
-
-    def record_entry(self, training_site: str, instructor: str):
-        """Record a single processed ecard entry."""
-        if training_site not in self._data:
-            self._data[training_site] = OrderedDict()
-            self._totals[training_site] = 0
-
-        self._data[training_site][instructor] = self._data[training_site].get(instructor, 0) + 1
-        self._totals[training_site] += 1
-
-    def save_report(self):
-        """Write the report to logs/<run_date>.csv"""
-        project_root = os.path.dirname(BASE_DIR)  # one level up from utils/
-        logs_dir = os.path.join(project_root, "logs")
-        os.makedirs(logs_dir, exist_ok=True)
-
-        filename = datetime.now().strftime("%Y-%m-%d") + ".csv"
-        filepath = os.path.join(logs_dir, filename)
-
-        with open(filepath, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(["Training Site", "Instructor (Entries)", "Total Processed Entries"])
-
-            for site, instructors in self._data.items():
-                total = self._totals[site]
-                first_row = True
-                for instructor, count in instructors.items():
-                    row_site = site if first_row else ""
-                    row_total = total if first_row else ""
-                    writer.writerow([row_site, f"{instructor}: {count}", row_total])
-                    first_row = False
-
-        logger.info(f"Report saved to {filepath}")
-        return filepath
 
 
 def get_undetected_driver(headless: bool = False, max_retries: int = 3) -> Optional[webdriver.Chrome]:

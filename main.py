@@ -6,8 +6,7 @@ from utils.resend_using_requests import get_cookie_header, resend_ecard
 from utils.helper import (
     logger, select_by_text,
     get_undetected_driver,
-    save_error_screenshot,
-    ReportLogger
+    save_error_screenshot
 )
 
 from utils.automation import (
@@ -65,32 +64,29 @@ def run_at_specific_time(target_time_str):
 def start_scheduler():
     """Displays the menu and triggers the appropriate scheduling mode."""
     print("Select a time mode to run the script:")
-    print("1. Every 12 hours")
-    print("2. Every 24 hours")
-    print("3. At a specific time (e.g., 05:30, 18:00)")
-    print("4. Run now (no repetitions)")
+    print("1. Run with an interval (e.g., every 12 hours)")
+    print("2. At a specific time (e.g., 05:30, 18:00)")
+    print("3. Run now (no repetitions)")
     print("Press Ctrl+C at any time to stop the scheduler.")
 
-    choice = input("\nEnter your choice (1/2/3/4): ").strip()
+    choice = input("\nEnter your choice (1 | 2 | 3): ").strip()
 
     if choice == '1':
-        run_at_intervals(12)
+        interval = int(input("Enter the interval in hours (e.g., 12 for every 12 hours): ").strip())
+        run_at_intervals(interval)
     elif choice == '2':
-        run_at_intervals(24)
-    elif choice == '3':
         time_input = input("Enter the time in 24-hour HH:MM format (e.g., 18:30): ").strip()
         run_at_specific_time(time_input)
-    elif choice == '4':
+    elif choice == '3':
         print("Running immediately...")
         main()
     else:
-        print("Invalid choice. Please enter 1, 2, 3, or 4.")
+        print("Invalid choice. Please enter 1, 2, or 3.")
 
 
 def main():
     page_counter = 1
     driver = get_undetected_driver()
-    report = ReportLogger()
     try:
         if login_to_ecards(driver):
             logger.info("Login successful!")
@@ -155,7 +151,6 @@ def main():
         driver.quit()
 
     finally:
-        report.save_report()
         driver.quit()
 
 
