@@ -7,7 +7,6 @@ from utils.helper import (
     logger, select_by_text,
     get_undetected_driver,
     save_error_screenshot,
-    SessionPopupHandler,
     ReportLogger
 )
 
@@ -91,11 +90,9 @@ def start_scheduler():
 def main():
     page_counter = 1
     driver = get_undetected_driver()
-    popup_handler = SessionPopupHandler(driver)
     report = ReportLogger()
     try:
-        popup_handler.start()
-        if login_to_ecards(driver, popup_handler=popup_handler):
+        if login_to_ecards(driver):
             logger.info("Login successful!")
             # Capture authenticated cookies for this run; never reuse a copied
             # browser cookie header from a previous session.
@@ -103,10 +100,8 @@ def main():
             logger.info("Fetched authenticated cookies for this run (%d characters).",
                         len(cookie_header))
             # Inject override right after login lands on the eCards page
-            popup_handler.inject_override()
             select_by_text(driver, El.TRAINING_CENTER_SELECT, "Shell CPR, LLC.")
             wait_while_loading_display(driver)
-            popup_handler.inject_override()
             ecard_data = []
 
             training_sites = driver.find_elements(*El.TRAINING_SITE_OPTIONS)
@@ -115,7 +110,6 @@ def main():
                     continue
 
                 search_sent_cards(driver, site)
-                popup_handler.inject_override()
                 training_site = site.text
 
                 while True:
@@ -140,7 +134,6 @@ def main():
 
                     click_element(driver, El.NEXT_PAGE_SELECTOR(page_counter))
                     wait_while_loading_display(driver)
-                    popup_handler.inject_override()
 
             if ecard_data:
                 logger.info(f"Found {len(ecard_data)} sent eCards to resend.")
@@ -163,7 +156,6 @@ def main():
 
     finally:
         report.save_report()
-        popup_handler.stop()
         driver.quit()
 
 

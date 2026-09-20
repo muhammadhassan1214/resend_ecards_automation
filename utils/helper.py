@@ -2,7 +2,6 @@ import os
 import csv
 import time
 import logging
-import threading
 from datetime import datetime
 from collections import OrderedDict
 from typing import Optional
@@ -23,139 +22,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 driver_path = os.path.abspath(os.path.join(BASE_DIR, 'chrome.exe'))
-
-
-class SessionPopupHandler:
-    """Background thread that keeps the session alive using a two-pronged
-    approach:
-
-    1. **JS Override** – After every navigation, ``inject_override()``
-       replaces the page's ``TimeOut()`` function so it automatically calls
-       ``ExtendTimeout()`` instead of showing the modal.  This means even
-       if the server fires the timeout callback, the session is silently
-       extended.
-
-    2. **Periodic heartbeat** – A daemon thread hits ``/ExtendSession/Extend``
-       via ``jQuery.get`` every ~4 min 55 s as a safety-net, and also
-       dismisses the modal + calls ``ExtendTimeout()`` if the popup somehow
-       appears.
-    """
-
-    EXTEND_INTERVAL = 295  # 4 minutes 55 seconds
-
-    # JS snippet that neuters the TimeOut popup and auto-extends
-    _OVERRIDE_JS = """
-    (function(){
-        // Override TimeOut so it auto-extends instead of showing the modal
-        window.TimeOut = function(){
-            if(typeof ExtendTimeout === 'function'){ ExtendTimeout(); }
-            try{ $('#timeOutModal').modal('hide'); }catch(e){}
-            console.log('[SessionPopupHandler] TimeOut intercepted — session extended');
-        };
-
-        // Clear any pending logout timer that TimerLogout() may have started
-        if(typeof objLogout !== 'undefined'){
-            try{ clearTimeout(objLogout); clearInterval(objLogout); }catch(e){}
-        }
-
-        // Dismiss the modal right now if it's visible (BS3 uses 'in', BS4/5 uses 'show')
-        try{
-            var m = document.getElementById('timeOutModal');
-            if(m && (m.classList.contains('in') || m.classList.contains('show') || m.style.display === 'block')){
-                if(typeof ExtendTimeout === 'function'){ ExtendTimeout(); }
-                try{ $('#timeOutModal').modal('hide'); }catch(e){}
-            }
-        }catch(e){}
-
-        // Safety-net: set up a recurring watcher that auto-dismisses the modal
-        // if it ever becomes visible (runs every 5 seconds)
-        if(!window._sessionPopupWatcher){
-            window._sessionPopupWatcher = setInterval(function(){
-                try{
-                    var m = document.getElementById('timeOutModal');
-                    if(m && (m.classList.contains('in') || m.classList.contains('show') || m.style.display === 'block')){
-                        if(typeof ExtendTimeout === 'function'){ ExtendTimeout(); }
-                        try{ $('#timeOutModal').modal('hide'); }catch(e){}
-                        console.log('[SessionPopupHandler] Modal dismissed by watcher');
-                    }
-                }catch(e){}
-            }, 5000);
-        }
-    })();
-    """
-
-    def __init__(self, driver, interval=None):
-        self._driver = driver
-        self._interval = interval or self.EXTEND_INTERVAL
-        self._running = False
-        self._thread = None
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-    def start(self):
-        """Start the background session-extend thread."""
-        if self._running:
-            return
-        self._running = True
-        self._thread = threading.Thread(target=self._keep_session_alive, daemon=True)
-        self._thread.start()
-        logger.info(
-            "Session popup handler started — heartbeat every %ss, "
-            "TimeOut() override active.", self._interval
-        )
-
-    def stop(self):
-        """Stop the background session-extend thread."""
-        self._running = False
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=5)
-        logger.info("Session popup handler stopped.")
-
-    def inject_override(self):
-        """Inject (or re-inject) the TimeOut override into the current page.
-
-        Call this after every full-page navigation so the override survives
-        page reloads.
-        """
-        try:
-            self._driver.execute_script(self._OVERRIDE_JS)
-            logger.debug("TimeOut override injected into page.")
-        except WebDriverException:
-            pass
-        except Exception:
-            pass
-
-    # ------------------------------------------------------------------
-    # Background heartbeat
-    # ------------------------------------------------------------------
-    def _keep_session_alive(self):
-        while self._running:
-            # Sleep first — the session is fresh right after login
-            for _ in range(self._interval):
-                if not self._running:
-                    return
-                time.sleep(1)
-            try:
-                # 1) Re-inject override (page may have reloaded)
-                self._driver.execute_script(self._OVERRIDE_JS)
-                # 2) Proactively extend via the AJAX endpoint
-                self._driver.execute_script(
-                    "if(typeof jQuery!=='undefined'){"
-                    "  jQuery.get('/ExtendSession/Extend');"
-                    "}"
-                    "if(typeof ExtendTimeout==='function'){ ExtendTimeout(); }"
-                )
-                # 3) Dismiss modal if somehow visible
-                self._driver.execute_script(
-                    "try{ $('#timeOutModal').modal('hide'); }catch(e){}"
-                )
-                logger.info("Session heartbeat — extended session & re-injected override.")
-            except WebDriverException:
-                # Driver may be busy navigating or closed; silently ignore
-                pass
-            except Exception:
-                pass
 
 
 class ReportLogger:
@@ -299,7 +165,7 @@ def wait_for_page_load(driver, timeout: int = 30) -> bool:
         return False
 
 
-def safe_navigate_to_url(driver, url: str, max_retries: int = 3, popup_handler: Optional['SessionPopupHandler'] = None) -> bool:
+def safe_navigate_to_url(driver, url: str, max_retries: int = 3) -> bool:
     """Navigate to URL with retry logic and exception handling."""
     for attempt in range(max_retries):
         try:
@@ -307,8 +173,8 @@ def safe_navigate_to_url(driver, url: str, max_retries: int = 3, popup_handler: 
             if wait_for_page_load(driver):
                 logger.info(f"Successfully navigated to: {url}")
                 # Re-inject session override after page load
-                if popup_handler is not None:
-                    popup_handler.inject_override()
+                # if popup_handler is not None:
+                #     popup_handler.inject_override()
                 return True
             else:
                 logger.warning(f"Page load incomplete for: {url}")
