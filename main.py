@@ -1,12 +1,13 @@
 import time
 import datetime
 from utils.elements_locators import ECardsLocators as El
-from utils.helper import check_element_exists, click_element
-from utils.resend_using_requests import get_cookie_header, resend_ecard
+from utils.resend_using_requests import create_authenticated_session, resend_ecard
 from utils.helper import (
     logger, select_by_text,
     get_undetected_driver,
-    save_error_screenshot
+    save_error_screenshot,
+    check_element_exists,
+    click_element
 )
 
 from utils.automation import (
@@ -86,15 +87,14 @@ def start_scheduler():
 
 def main():
     page_counter = 1
-    driver = get_undetected_driver()
+    driver = get_undetected_driver(headless=True)
+    resend_session = None
     try:
         if login_to_ecards(driver):
             logger.info("Login successful!")
-            # Capture authenticated cookies for this run; never reuse a copied
-            # browser cookie header from a previous session.
-            cookie_header = get_cookie_header(driver)
-            logger.info("Fetched authenticated cookies for this run (%d characters).",
-                        len(cookie_header))
+            # Reuse one HTTP session so resend requests can share connections.
+            resend_session = create_authenticated_session(driver)
+            logger.info("Created authenticated resend session.")
             # Inject override right after login lands on the eCards page
             select_by_text(driver, El.TRAINING_CENTER_SELECT, "Shell CPR, LLC.")
             wait_while_loading_display(driver)
@@ -134,7 +134,7 @@ def main():
             if ecard_data:
                 logger.info(f"Found {len(ecard_data)} sent eCards to resend.")
                 for ecard in ecard_data:
-                    response = resend_ecard(driver, ecard, cookie=cookie_header)
+                    response = resend_ecard(resend_session, ecard)
                     if response.status_code == 200:
                         logger.info(f"Successfully resent eCard to {ecard['EmailAddress']} "
                                     f"for training site {ecard['TrainingSite']}.")
@@ -151,6 +151,8 @@ def main():
         driver.quit()
 
     finally:
+        if resend_session is not None:
+            resend_session.close()
         driver.quit()
 
 
