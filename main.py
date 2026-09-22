@@ -87,7 +87,7 @@ def start_scheduler():
 
 def main():
     page_counter = 1
-    driver = get_undetected_driver(headless=True)
+    driver = get_undetected_driver(headless=False)
     resend_session = None
     try:
         if login_to_ecards(driver):
